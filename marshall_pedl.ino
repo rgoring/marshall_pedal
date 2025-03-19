@@ -69,13 +69,13 @@ struct led_t {
   uint8_t pin;
 };
 
-// globals
+// Globals
 static struct settings_t settings = settings_t();
 static struct channel_t *currentchannel = nullptr;
 
-//store the amp channel data at an offset in eeprom
-//this offset must be larger than settings_t size in bytes
 #define SETTINGS_MEM_OFFSET 0
+//Store the amp channel data at an offset in EEPROM.
+//This offset must be larger than settings_t size in bytes.
 #define CHANNELS_MEM_OFFSET sizeof(struct settings_t)
 
 
@@ -122,16 +122,21 @@ void sendFxLoop(bool on)
 
 void syncAmp()
 {
+  // This syncing is only done when 'resetting' the pedal so that the
+  // pedal and amp start in the same state.
   delay(1000);
+  // Loop through each channel, setting the master to 1 and FX loop off.
+  // This provides a consistent starting state which matches the initalized
+  // channel states in this code.
   for (const struct channel_t &channel : channels) {
     sendChannel(&channel);
     updateLedsForChannel(&channel);
     delay(300);
-    // set master 1
+    // Set master 1.
     sendMaster(true);
     updateLedsForChannel(&channel);
     delay(300);
-    // set fx loop off
+    // Set FX loop off.
     sendFxLoop(false);
     updateLedsForChannel(&channel);
     delay(300);
@@ -185,52 +190,6 @@ void midiTest()
   }
 }
 
-void setup()
-{
-  for (const struct button_t &button : buttons) {
-    pinMode(button.pin, INPUT_PULLUP);
-  }
-
-  for (const struct led_t &led : leds) {
-    pinMode(led.pin, OUTPUT);
-    digitalWrite(led.pin, LOW);
-  }
-
-  MIDI.begin(MIDI_CHANNEL);
-
-  // holding master button on power on initializes reset
-  if (isButtonPressedWithoutBounce(&buttons[BUTTON_MASTER])) {
-    clearEeprom();
-    blinkAllLeds(700);
-    syncAmp();
-    blinkAllLeds(700);
-    // select CHANNEL_CLEAN
-    currentchannel = &channels[0];
-    saveToEeprom();
-  }
-
-  // read settings from eeprom into settings and channels
-  loadFromEeprom();
-
-  // Load the channels
-  for (const struct channel_t &channel : channels) {
-    if (channel.selected) {
-      currentchannel = &channel;
-    }
-  }
-  // if no channel is selected, something went wrong
-  // user should reset the eeprom and try again
-  // This should never happen since the default channel initialization selects CHANNEL_CLEAN.
-  if (currentchannel == nullptr) {
-    while (true) {
-      blinkAllLeds(500);
-      delay(500);
-    }
-  }
-  sendChannel(currentchannel);
-  updateLedsForChannel(currentchannel);
-}
-
 bool isButtonPressedWithoutBounce(struct button_t *button)
 {
   return (digitalRead(button->pin) == LOW) ? true : false;
@@ -238,51 +197,12 @@ bool isButtonPressedWithoutBounce(struct button_t *button)
 
 bool isButtonPressedWithBounce(struct button_t *button)
 {
-  // Debounce logic from https://forum.arduino.cc/t/5-button-marshall-dsl40cr-footswtich-controller/531856/2
-  // Read and debounce button, return true on falling edge
+  // Read and debounce button, return true once debounced.
+  // Meant to be called multiple times from the main loop.
   const static unsigned long debounceTime = 30;
-  const static int8_t rising = HIGH - LOW;
-  const static int8_t falling = LOW - HIGH;
   bool pressed = false;
-  // read the button's current state
+  // Read the button's current state.
   bool state = digitalRead(button->pin);
-  // calculate the state change since last time
-  int8_t stateChange = state - button->lastState;
-
-  //  if (state == LOW && button->lastMillis == 0) {
-  //    // button first pressed, start debounce period
-  //    button->lastMillis = millis();
-  //  } else if (state == LOW && button->lastMillis != 0) {
-  //    // in debounce period. See if button has been low longer than the debounce period
-  //    if (millis() > (button->lastMillis + debounceTime)) {
-  //      pressed = true;
-  //    }
-  //  } else if (state == HIGH) {
-  //    if (millis() > (button->lastMillis + debounceTime)) {
-  //      // state is high, and we're past the debounce period
-  //      // button was released
-  //      button->lastMillis = 0;
-  //    } else {
-  //      // bounce during the debounce period .. do nothing
-  //    }
-  //  }
-  //  return pressed;
-
-  //  // If the button is pressed (went from high to low)
-  //  if (stateChange == falling) {
-  //    // check if the time since the last bounce is higher than the threshold
-  //    if (millis() - button->lastMillis > debounceTime) {
-  //      pressed = true; // the button is pressed
-  //    }
-  //  } else if (stateChange == rising) {
-  //    // if the button is released or bounces
-  //    // remember when this happened
-  //    button->lastMillis = millis();
-  //  }
-  //  // remember the current state
-  //  button->lastState = state;
-  //  // return true if the button was pressed and didn't bounce
-  //  return pressed;
 
   //  button states
   //  -------------
@@ -302,18 +222,18 @@ bool isButtonPressedWithBounce(struct button_t *button)
   //  button->millis > debounce; // reset to button->millis = 0 (back to beginning state)
 
   if (state != button->lastState) {
-    // button pushed or bouncing, reset the counter each time it happens and save
-    // the last state
+    // Button pushed or bouncing, reset the counter each time it happens and save
+    // the last state.
     button->lastMillis = millis();
     button->lastState = state;
   } else if (state == LOW && (millis() > (button->lastMillis + debounceTime))) {
     if (button->lastMillis != 0) {
       pressed = true;
     }
-    // only register the first time it's out of the debounce period
+    // Only register the first time it's out of the debounce period.
     button->lastMillis = 0;
   } else if (state == HIGH && (millis() > (button->lastMillis + debounceTime))) {
-    // button sitting idle high, reset the counter
+    // Button sitting idle high, reset the counter.
     button->lastMillis = 0;
   }
   return pressed;
@@ -337,7 +257,6 @@ void setLed(struct led_t *led, bool on)
 void updateLedsForChannel(struct channel_t *channel)
 {
   for (const struct led_t &led : leds) {
-    // hacky
     switch (led.type) {
       case LED_CLEAN:
         setLed(&led, channel->type == CHANNEL_CLEAN);
@@ -387,9 +306,9 @@ void loadChannelsFromEeprom()
 
 void loadFromEeprom()
 {
-  // read settings from EEPROM
+  // Read settings from EEPROM.
   if (loadSettingsFromEeprom()) {
-    // read channels from EEPROM
+    // Read channels from EEPROM only if settings are good.
     loadChannelsFromEeprom();
   }
 }
@@ -420,16 +339,16 @@ void clearEeprom()
 
 void saveToEeprom()
 {
-  // write settings to EEPROM
+  // Write settings to EEPROM.
   saveSettingsToEeprom();
 
-  // write channels to EEPROM
+  // Write channels to EEPROM.
   saveChannelsToEeprom();
 }
 
 void selectChannel(ChannelType type)
 {
-  // same channel selected, don't do anything
+  // Same channel selected, don't do anything.
   if (type == currentchannel->type) {
     return;
   }
@@ -487,8 +406,55 @@ void handleButtonPress(struct button_t *button)
   }
 }
 
+void setup()
+{
+  for (const struct button_t &button : buttons) {
+    pinMode(button.pin, INPUT_PULLUP);
+  }
+
+  for (const struct led_t &led : leds) {
+    pinMode(led.pin, OUTPUT);
+    digitalWrite(led.pin, LOW);
+  }
+
+  MIDI.begin(MIDI_CHANNEL);
+
+  // Holding master button on power on initializes reset.
+  if (isButtonPressedWithoutBounce(&buttons[BUTTON_MASTER])) {
+    clearEeprom();
+    blinkAllLeds(700);
+    syncAmp();
+    blinkAllLeds(700);
+    // select CHANNEL_CLEAN
+    currentchannel = &channels[0];
+    saveToEeprom();
+  }
+
+  // Read settings from eeprom into settings and channels.
+  loadFromEeprom();
+
+  // Load the channels
+  for (const struct channel_t &channel : channels) {
+    if (channel.selected) {
+      currentchannel = &channel;
+    }
+  }
+  // If no channel is selected, something went wrong.
+  // User should reset the eeprom and try again.
+  // This should never happen since the default channel initialization selects CHANNEL_CLEAN.
+  if (currentchannel == nullptr) {
+    while (true) {
+      blinkAllLeds(500);
+      delay(500);
+    }
+  }
+  sendChannel(currentchannel);
+  updateLedsForChannel(currentchannel);
+}
+
 void loop()
 {
+  // Check for pressed buttons and handle them.
   struct button_t *button = getPressedButton();
   if (button != nullptr) {
     handleButtonPress(button);
